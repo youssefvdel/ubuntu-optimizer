@@ -1,7 +1,6 @@
 mod backend;
 
 use crossterm::{
-    cursor,
     event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -78,6 +77,10 @@ struct App {
     list_index: usize,
     log: Vec<String>,
     log_scroll: u16,
+    // click areas computed on last draw (row rects, menu items, action buttons)
+    body_rows: Vec<u16>,      // y positions of table rows in screen coords
+    menu_items: Vec<u16>,     // y positions of sidebar items
+    action_rows: Vec<(u16, &'static str)>, // y + action key for s/a/r/q buttons
 }
 
 impl App {
@@ -93,6 +96,9 @@ impl App {
             list_index: 0,
             log: vec![log0],
             log_scroll: 0,
+            body_rows: Vec::new(),
+            menu_items: Vec::new(),
+            action_rows: Vec::new(),
         }
     }
 
@@ -224,30 +230,43 @@ echo '>>> Defaults restored.'";
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) {
-        // column (0-based x), row (0-based y) of the click
         let x = mouse.column;
         let y = mouse.row;
         match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) => {
-                let (bx, by, bw, _bh) = unsafe { BODY_RECT };
-                // Click on the table body: rows start at by+2 (header is by+1, border by)
-                if x >= bx && x < bx + bw {
-                    if y > by + 1 {
-                        let row_idx = (y - by - 2) as usize;
-                        let rows = self.visible_rows();
-                        if row_idx < rows.len() {
-                            self.list_index = row_idx;
-                            self.toggle_current();
+            // Only handle press (Down), not release (Up) — avoids double-toggle
+            MouseEventKind::Down(MouseButton::Left) => {
+                // 1. Sidebar menu items (Overview..Desktop)
+                for (idx, item_y) in self.menu_items.iter().enumerate() {
+                    if y == *item_y && x < 22 {
+                        if idx < View::ALL.len() {
+                            self.view = View::ALL[idx];
+                            self.list_index = 0;
                         }
+                        return;
                     }
                 }
-                // Click on sidebar (Menu) — views are first 5 rows
-                let sw = unsafe { SIDEBAR_W };
-                if x < sw && y >= 1 && y < 6 {
-                    let idx = (y - 1) as usize;
-                    if idx < View::ALL.len() {
-                        self.view = View::ALL[idx];
-                        self.list_index = 0;
+                // 2. Action buttons in sidebar (s/a/r/q)
+                for (btn_y, action) in &self.action_rows {
+                    if y == *btn_y && x < 22 {
+                        match *action {
+                            "s" => self.scan_now(),
+                            "a" => self.apply_selected(),
+                            "r" => self.restore(),
+                            "q" => std::process::exit(0),
+                            _ => {}
+                        }
+                        return;
+                    }
+                }
+                // 3. Table rows (click to toggle)
+                for (idx, row_y) in self.body_rows.iter().enumerate() {
+                    if y == *row_y && x >= 22 {
+                        let rows = self.visible_rows();
+                        if idx < rows.len() {
+                            self.list_index = idx;
+                            self.toggle_current();
+                        }
+                        return;
                     }
                 }
             }
@@ -612,11 +631,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-// Layout rects tracked from the last draw, used to map mouse clicks
-static mut BODY_RECT: (u16, u16, u16, u16) = (0, 0, 0, 0); // x, y, w, h
-static mut SIDEBAR_W: u16 = 22;
-
-fn update_click_rects(f: &Frame) {
+fn update_click_rects(f: &Frame, app: &mut App) {
     let area = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -631,10 +646,21 @@ fn update_click_rects(f: &Frame) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(22), Constraint::Min(0)])
         .split(chunks[1]);
-    unsafe {
-        BODY_RECT = (cols[1].x, cols[1].y, cols[1].width, cols[1].height);
-        SIDEBAR_W = cols[0].width;
-    }
+
+    // Sidebar items: block border at cols[0].y, items start at +1
+    app.menu_items = (0..View::ALL.len())
+        .map(|i| cols[0].y + 1 + i as u16)
+        .collect();
+    // Actions: 5 view items + 1 blank line, then s/a/r/q
+    app.action_rows = vec![
+        (cols[0].y + 7, "s"),
+        (cols[0].y + 8, "a"),
+        (cols[0].y + 9, "r"),
+        (cols[0].y + 10, "q"),
+    ];
+    // Table rows: border at cols[1].y, header at +1, data rows at +2..
+    let n = app.visible_rows().len() as u16;
+    app.body_rows = (0..n).map(|i| cols[1].y + 2 + i).collect();
 }
 
 fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> io::Result<()> {
@@ -643,7 +669,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> io::Re
         .push("Press [s] to scan, [Space] to select, [a] to apply.".into());
     loop {
         terminal.draw(|f| {
-            update_click_rects(f);
+            update_click_rects(f, &mut app);
             ui(f, &app)
         })?;
 
