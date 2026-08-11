@@ -1,0 +1,13 @@
+[package]
+name = "ubuntu-optimizer"
+version = "0.1.0"
+edition = "2021"
+description = "Ubuntu Optimizer & Debloater — clean, fast, private Ubuntu (TUI)"
+authors = ["Youssef"]
+license = "MIT"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.28"
+serde = { version = "1", features = ["derive"] }
+libc = "0.2"
