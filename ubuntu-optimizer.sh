@@ -32,12 +32,12 @@ is_applied() { # fn returns 0 if the check says "already applied"
     firefox_ppa)      [ -f /etc/apt/sources.list.d/mozilla.list ] || [ -f /etc/apt/preferences.d/mozilla ];;
     telemetry_off)    ! command -v ubuntu-report >/dev/null 2>&1;;
     apport_off)       grep -q "enabled=0" /etc/default/apport 2>/dev/null || ! [ -e /usr/bin/apport-cli ];;
-    motd_off)         ! [ -e /etc/update-motd.d/50-motd-news ];;
+    motd_off)         ! [ -x /etc/update-motd.d/50-motd-news ] 2>/dev/null;;
     swappiness_tuned) [ "$(cat /proc/sys/vm/swappiness 2>/dev/null)" -le 10 ];;
     shutdown_fast)    grep -q "DefaultTimeoutStopSec=10s" /etc/systemd/system.conf 2>/dev/null;;
     ssd_trim)         systemctl is-enabled fstrim.timer >/dev/null 2>&1;;
     tracker_off)      systemctl --user is-masked tracker-miner-fs-3.service >/dev/null 2>&1;;
-    baloo_off)        balooctl status 2>/dev/null | grep -qiE "disabled|not running";;
+    baloo_off)        { balooctl6 status 2>/dev/null || balooctl status 2>/dev/null; } | grep -qiE "disabled|not running";;
     bloat_removed)    ! [ -e /usr/games/gnome-mines ] && ! [ -e /usr/games/kmines ];;
   esac
 }
@@ -99,7 +99,8 @@ do_apply "Disable crash popups" apport_off bash -c "
 
 do_apply "Remove terminal ads" motd_off bash -c "
   $SUDO chmod -x /etc/update-motd.d/50-motd-news /etc/update-motd.d/80-livepatch 2>/dev/null;
-  $SUDO sed -i 's/ENABLED=1/ENABLED=0/g' /etc/default/motd-news 2>/dev/null"
+  [ -f /etc/default/motd-news ] && $SUDO sed -i 's/ENABLED=1/ENABLED=0/g' /etc/default/motd-news 2>/dev/null;
+  true"
 
 echo -e "${BOLD}${CYAN}── Performance ────────────────────────────${NC}"
 do_apply "Tune swappiness (10)" swappiness_tuned bash -c "
@@ -118,7 +119,8 @@ case "$DESKTOP" in
       systemctl --user stop tracker-miner-fs-3.service tracker-extract-3.service 2>/dev/null;
       systemctl --user mask tracker-miner-fs-3.service tracker-extract-3.service 2>/dev/null";;
   *KDE*|*kde*|*Plasma*|*plasma*)
-    do_apply "Disable Baloo indexing" baloo_off bash -c "balooctl disable 2>/dev/null || balooctl purge 2>/dev/null";;
+    do_apply "Disable Baloo indexing" baloo_off bash -c "
+      balooctl6 disable 2>/dev/null || balooctl disable 2>/dev/null || balooctl6 purge 2>/dev/null; true";;
 esac
 
 do_apply "Remove desktop bloat" bloat_removed bash -c "$SUDO apt-get purge -y aisleriot gnome-mahjongg gnome-mines gnome-sudoku shotwell kmines ksudoku 2>/dev/null; $SUDO apt-get autoremove -y 2>/dev/null"
