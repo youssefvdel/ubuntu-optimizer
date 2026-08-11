@@ -1,7 +1,8 @@
 mod backend;
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    cursor,
+    event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -220,6 +221,40 @@ echo '>>> Defaults restored.'";
             Err(e) => self.log.push(format!("ERROR: {e}")),
         }
         self.log_scroll = self.log.len().saturating_sub(1) as u16;
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent) {
+        // column (0-based x), row (0-based y) of the click
+        let x = mouse.column;
+        let y = mouse.row;
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) => {
+                let (bx, by, bw, _bh) = unsafe { BODY_RECT };
+                // Click on the table body: rows start at by+2 (header is by+1, border by)
+                if x >= bx && x < bx + bw {
+                    if y > by + 1 {
+                        let row_idx = (y - by - 2) as usize;
+                        let rows = self.visible_rows();
+                        if row_idx < rows.len() {
+                            self.list_index = row_idx;
+                            self.toggle_current();
+                        }
+                    }
+                }
+                // Click on sidebar (Menu) — views are first 5 rows
+                let sw = unsafe { SIDEBAR_W };
+                if x < sw && y >= 1 && y < 6 {
+                    let idx = (y - 1) as usize;
+                    if idx < View::ALL.len() {
+                        self.view = View::ALL[idx];
+                        self.list_index = 0;
+                    }
+                }
+            }
+            MouseEventKind::ScrollDown => self.handle_key(KeyCode::Down),
+            MouseEventKind::ScrollUp => self.handle_key(KeyCode::Up),
+            _ => {}
+        }
     }
 
     fn handle_key(&mut self, key: KeyCode) {
@@ -558,6 +593,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, event::EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -565,6 +601,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         run_app(&mut terminal)
     }));
 
+    execute!(terminal.backend_mut(), event::DisableMouseCapture)?;
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
@@ -575,12 +612,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+// Layout rects tracked from the last draw, used to map mouse clicks
+static mut BODY_RECT: (u16, u16, u16, u16) = (0, 0, 0, 0); // x, y, w, h
+static mut SIDEBAR_W: u16 = 22;
+
+fn update_click_rects(f: &Frame) {
+    let area = f.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(6),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(22), Constraint::Min(0)])
+        .split(chunks[1]);
+    unsafe {
+        BODY_RECT = (cols[1].x, cols[1].y, cols[1].width, cols[1].height);
+        SIDEBAR_W = cols[0].width;
+    }
+}
+
 fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> io::Result<()> {
     let mut app = App::new();
     app.log
         .push("Press [s] to scan, [Space] to select, [a] to apply.".into());
     loop {
-        terminal.draw(|f| ui(f, &app))?;
+        terminal.draw(|f| {
+            update_click_rects(f);
+            ui(f, &app)
+        })?;
 
         if event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
@@ -591,6 +656,8 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> io::Re
                     return Ok(());
                 }
                 app.handle_key(key.code);
+            } else if let Event::Mouse(mouse) = event::read()? {
+                app.handle_mouse(mouse);
             }
         }
     }

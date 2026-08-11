@@ -3,7 +3,7 @@
 # Usage:  curl -fsSL <url> | sh
 set -e
 
-BIN_URL="${UB_OPT_URL:-https://raw.githubusercontent.com/youssefvdel/ubuntu-optimizer/main/ubuntu-optimizer}"
+BIN_URL="${UB_OPT_URL:-https://github.com/youssefvdel/ubuntu-optimizer/releases/latest/download/ubuntu-optimizer}"
 TMP_BIN="${TMPDIR:-/tmp}/ubuntu-optimizer-$$"
 
 echo "Ubuntu Optimizer & Debloater"
