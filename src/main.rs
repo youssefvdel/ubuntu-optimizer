@@ -17,7 +17,7 @@ use std::io;
 
 const TITLE: &str = " Ubuntu Optimizer & Debloater ";
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum View {
     Overview,
     Packages,
@@ -232,6 +232,8 @@ echo '>>> Defaults restored.'";
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         let x = mouse.column;
         let y = mouse.row;
+        self.log.push(format!("[mouse] kind={:?} x={x} y={y}", mouse.kind));
+        self.log_scroll = self.log.len().saturating_sub(1) as u16;
         match mouse.kind {
             // Only handle press (Down), not release (Up) — avoids double-toggle
             MouseEventKind::Down(MouseButton::Left) => {
@@ -686,5 +688,96 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> io::Re
                 app.handle_mouse(mouse);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    fn mk_click(x: u16, y: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::empty(),
+        }
+    }
+
+    fn app_with_rects() -> App {
+        let mut app = App::new();
+        // Simulate a draw with body at y=3 (header 3 rows), rows at y=5,6,7
+        app.body_rows = vec![5, 6, 7];
+        app.menu_items = vec![4, 5, 6, 7, 8]; // Overview..Desktop at sidebar y=4..8
+        app.action_rows = vec![(10, "s"), (11, "a"), (12, "r"), (13, "q")];
+        app
+    }
+
+    #[test]
+    fn click_menu_switches_view() {
+        let mut app = app_with_rects();
+        app.view = View::Overview;
+        // Click "Desktop" menu item at y=8
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 8,
+            modifiers: KeyModifiers::empty(),
+        });
+        assert_eq!(app.view, View::Desktop, "click on Desktop menu item should switch view");
+    }
+
+    #[test]
+    fn click_row_toggles_selection() {
+        let mut app = app_with_rects();
+        app.scan.remove_snap = false;
+        // Click on the first NOT-applied row (x>22)
+        let rows = app.visible_rows();
+        assert!(!rows.is_empty());
+        let target_idx = rows.iter().position(|k| !app.is_applied(k)).unwrap_or(0);
+        let row_y = 5 + target_idx as u16;
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 30,
+            row: row_y,
+            modifiers: KeyModifiers::empty(),
+        });
+        
+        let first = rows[target_idx];
+        assert_eq!(app.selected.get(first), Some(&true), "click on row should select it");
+        // second click toggles off
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 30,
+            row: row_y,
+            modifiers: KeyModifiers::empty(),
+        });
+        assert_eq!(app.selected.get(first), Some(&false), "second click should deselect");
+    }
+
+    #[test]
+    fn click_scan_action_runs() {
+        let mut app = app_with_rects();
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 10, // s action
+            modifiers: KeyModifiers::empty(),
+        });
+        assert!(app.log.iter().any(|l| l.contains("Scan complete")), "click on s should scan");
+    }
+
+    #[test]
+    fn scroll_moves_selection() {
+        let mut app = app_with_rects();
+        app.list_index = 0;
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::empty(),
+        });
+        assert_eq!(app.list_index, 1, "scroll down should move selection down");
     }
 }
